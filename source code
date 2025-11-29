@@ -1,0 +1,265 @@
+.model small
+.stack 100h
+
+.data
+    ; --- Variables ---
+    pin_stored  db '1234'       ; The correct PIN
+    pin_input   db 4 dup(?)     ; Buffer for user input
+    balance     dw 5000         ; Starting Balance (5000)
+    
+    ; --- UI Messages ---
+    msg_welcome db 10, 13, '=== WELCOME TO ASSEMBLY BANK BY AMR HElAL===$'
+    msg_pin     db 10, 13, 'Enter PIN (4 digits): $'
+    msg_fail    db 10, 13, 'Access Denied! Wrong PIN.$'
+    msg_menu    db 10, 13, 10, 13, '1. Check Balance', 10, 13, '2. Deposit', 10, 13, '3. Withdraw', 10, 13, '4. Exit', 10, 13, 'Choose > $'
+    
+    msg_bal     db 10, 13, 'Current Balance: $'
+    msg_dep     db 10, 13, 'Enter Amount to Deposit: $'
+    msg_with    db 10, 13, 'Enter Amount to Withdraw: $'
+    msg_err     db 10, 13, 'Error: Insufficient Funds!$'
+    msg_pos     db 10, 13, 'Error: Amount must be positive!$'  
+    msg_inv     db 10, 13, 'Invalid Option! Please enter 1-4.$'
+    msg_done    db 10, 13, 'Transaction Successful.$'
+    msg_bye     db 10, 13, 'Thank you using Assembly Bank. Bye!$'
+    newline     db 10, 13, '$'
+
+.code
+main proc
+    ; --- Initialize Segments ---
+    mov ax, @data
+    mov ds, ax
+    mov es, ax          ; Initialize ES for string comparison
+
+    ; --- 1. PIN Authentication ---
+    lea dx, msg_welcome
+    mov ah, 09h
+    int 21h
+
+    lea dx, msg_pin
+    mov ah, 09h
+    int 21h
+
+    ; Read 4 digits for PIN
+    mov cx, 4
+    lea si, pin_input
+read_pin_loop:
+    mov ah, 01h         ; Read char
+    int 21h
+    mov [si], al        ; Store char
+    inc si
+    loop read_pin_loop
+
+    ; Verify PIN
+    lea si, pin_stored  ; DS:SI points to stored PIN
+    lea di, pin_input   ; ES:DI points to input PIN
+    mov cx, 4
+    repe cmpsb          ; Compare string at DS:SI with ES:DI
+    jne access_denied   ; If not equal, jump to error
+
+    ; --- 2. Main Menu Loop ---
+menu_loop:
+    lea dx, msg_menu
+    mov ah, 09h
+    int 21h
+
+    mov ah, 01h         ; Read Choice
+    int 21h
+    
+    cmp al, '1'
+    je show_balance
+    cmp al, '2'
+    je deposit_money
+    cmp al, '3'
+    je withdraw_money
+    cmp al, '4'
+    je exit_program
+    
+    ; If input is not 1, 2, 3, or 4
+    jmp invalid_option
+
+invalid_option:
+    lea dx, msg_inv
+    mov ah, 09h
+    int 21h
+    jmp menu_loop
+
+positive_error:         ; <--- NEW: Handler for non-positive amounts
+    lea dx, msg_pos
+    mov ah, 09h
+    int 21h
+    jmp menu_loop
+
+; --- Feature: Show Balance ---
+show_balance:
+    lea dx, msg_bal
+    mov ah, 09h
+    int 21h
+    
+    mov ax, balance
+    call PRINT_NUM
+    jmp menu_loop
+
+; --- Feature: Deposit ---
+deposit_money:
+    lea dx, msg_dep
+    mov ah, 09h
+    int 21h
+    
+    call READ_NUM       ; Returns amount in AX
+    
+    cmp ax, 0           ; Check if amount is 0 or less
+    jle positive_error  ; If <= 0, jump to error
+    
+    add balance, ax     ; Update Balance
+    
+    lea dx, msg_done
+    mov ah, 09h
+    int 21h
+    jmp menu_loop
+
+; --- Feature: Withdraw ---
+withdraw_money:
+    lea dx, msg_with
+    mov ah, 09h
+    int 21h
+    
+    call READ_NUM       ; Returns amount in AX
+    
+    cmp ax, 0           ; Check if amount is 0 or less
+    jle positive_error  ; If <= 0, jump to error
+    
+    mov bx, ax          ; Save amount in BX
+    
+    ; Validation: Is Balance >= Amount?
+    mov ax, balance
+    cmp ax, bx
+    jl insufficient_funds ; If Balance < Amount
+    
+    sub balance, bx     ; Deduct amount
+    lea dx, msg_done
+    mov ah, 09h
+    int 21h
+    jmp menu_loop
+
+insufficient_funds:
+    lea dx, msg_err
+    mov ah, 09h
+    int 21h
+    jmp menu_loop
+
+; --- Exit & Error Handling ---
+access_denied:
+    lea dx, msg_fail
+    mov ah, 09h
+    int 21h
+    jmp exit_final
+
+exit_program:
+    lea dx, msg_bye
+    mov ah, 09h
+    int 21h
+
+exit_final:
+    mov ah, 4Ch
+    int 21h
+main endp
+
+; =============================================
+; Procedure: READ_NUM (Strict Positive Integer)
+; Input: User Types Digits
+; Output: AX contains the constructed number
+; =============================================
+READ_NUM proc
+    push bx
+    push cx
+    push dx
+    push si             ; Use SI as accumulator
+
+    xor si, si          ; Clear accumulator
+
+read_char_loop:
+    mov ah, 01h
+    int 21h
+
+    cmp al, 13          ; Enter key -> End input
+    je end_read_num
+    cmp al, ' '         ; Space key -> End input
+    je end_read_num
+    
+    ; --- VALIDATION START ---
+    cmp al, '0'         ; Check if below '0'
+    jb read_char_loop   ; Ignore input (don't process)
+    cmp al, '9'         ; Check if above '9'
+    ja read_char_loop   ; Ignore input (don't process)
+    ; --- VALIDATION END ---
+
+    sub al, '0'         ; Convert ASCII to digit
+    xor ah, ah          ; AX = digit
+    push ax             ; Save digit temporarily
+
+    ; Formula: Accumulator = Accumulator * 10
+    mov ax, si
+    mov bx, 10
+    mul bx              ; Result in DX:AX
+    mov si, ax          ; Update accumulator
+    
+    pop ax              ; Restore digit
+    add si, ax          ; Add digit to accumulator
+    
+    jmp read_char_loop
+
+end_read_num:
+    mov ax, si          ; Move result to AX for return
+    
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+READ_NUM endp
+
+; =============================================
+; Procedure: PRINT_NUM (Standard)
+; Input: AX (The number to print)
+; Output: Displays number on screen
+; =============================================
+PRINT_NUM proc
+    push bx
+    push cx
+    push dx
+
+    cmp ax, 0
+    jne start_print_n
+    ; If number is 0, manually print '0'
+    mov dl, '0'
+    mov ah, 02h
+    int 21h
+    jmp end_print_n
+
+start_print_n:
+    mov bx, 10
+    xor cx, cx
+
+calc_digits_n:
+    xor dx, dx
+    div bx              ; Divide AX by 10
+    push dx             ; Push remainder to stack
+    inc cx              ; Count digits
+    cmp ax, 0
+    jne calc_digits_n
+
+print_loop_n:
+    pop dx              ; Pop from stack (reverse order)
+    add dl, '0'         ; Convert to ASCII
+    mov ah, 02h
+    int 21h
+    loop print_loop_n
+
+end_print_n:
+    pop dx
+    pop cx
+    pop bx
+    ret
+PRINT_NUM endp
+
+end main
